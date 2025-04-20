@@ -153,7 +153,7 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
 
 
         // The Formula for determining the tag is as follows:
-         int256 tagScore = 0;
+        int256 tagScore = 0;
 
         if (stdLikeRate > 0) {
             tagScore += int256((likeRate - avgLikeRate) * 1000 / stdLikeRate);

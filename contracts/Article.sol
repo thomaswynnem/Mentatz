@@ -30,6 +30,11 @@ contract Article {
 
     mapping(bytes32 => ArticleResult) public articleResult; // User Stakes
 
+    struct StakingEth {
+        uint256 stake; // Amount of ETH Staked
+        uint256 ratioAtPurchaseTime; // Amount of ETH Staked
+    }
+
     struct ArticleCritic {
         address criticAddress; // User Who Makes Claim
         string quote; // Two Sentences Maximum
@@ -40,15 +45,18 @@ contract Article {
     }
 
     struct ArticleInProcess {
+        address author; // Author of the Article
         uint256 startTime; // Start Time of Voting
         uint256 votingPeriod; // Voting Period in Seconds
         bool votingActive; // Voting Active Flag
-        uint256 likedStaked; // Total ETH Staked
-        uint256 dislikedStaked; // Total ETH Staked
+        uint256 consensusStaked; // Total ETH Staked
+        uint256 demotionStaked; // Total ETH Staked
         uint256 totalCriticals;
         uint256 totalCritics; // Total Critics
         ArticleCritic[] articleCritics;
-        mapping(address => uint256) stakes; // User Stakes
+        mapping(address => StakingEth) stakesUp; // User Stakes Up
+        mapping(address => StakingEth) stakesDown; // User Stakes Down
+        string[] voters;
     }
 
     mapping(bytes32 => ArticleInProcess) public articleValues; // User Stakes
@@ -76,6 +84,7 @@ contract Article {
         }
         createTimePeriod(articleHash);
         articleValues[articleHash].votingActive = true;
+        articleValues[articleHash].author = author;
         return articleHash;
     }
 
@@ -103,24 +112,38 @@ contract Article {
         emit ArticleCritical(articleValues[articleHash].totalCritics - 1, criticAddress, quote, lazyFlagged, fraudFlagged);
     }
 
-    function articleFunded(bytes32 articleHash, bool liked) public payable {
+
+    function articleFunded(bytes32 articleHash, bool consensus) public payable {
 
         require(articleValues[articleHash].votingActive, "Voting is not active for this article.");
         require(msg.value > 0, "Must send ETH to vote.");
+        require(msg.sender != articleValues[articleHash].author, "Author cannot vote on their own article.");
 
-        articleValues[articleHash].stakes[msg.sender] += msg.value;
+        require(articleValues[articleHash].stakeUp[msg.sender].stake && consensus == true, "You have already voted yes on this article.");
+        require(articleValues[articleHash].stakeDown[msg.sender].stake && consensus == false, "You have already no voted on this article.");
 
         uint256 twentyDollarLimit = getOraclePrice();
 
-        if (articleValues[articleHash].stakes[msg.sender] > twentyDollarLimit) {
+        uint256 userTotal = articleVales[articleHash].stakesUp[msg.sender].stake + articleVales[articleHash].stakesDown[msg.sender].stake + msg.value;
+
+        if (userTotal > twentyDollarLimit) {
             revert("You have exceeded the $20 limit.");
         }
 
-        if (liked) {
-            articleValues[articleHash].likedStaked += msg.value;
+        uint256 ratioAtPurchaseTime; 
+        if (consensus) {
+            articleValues[articleHash].stakesUp.stake[msg.sender] += msg.value;
+            articleValues[articleHash].consensusStaked += msg.value;
+            ratioAtPurchaseTime = articleValues[articleHash].consensusStaked * 1000 / (articleValues[articleHash].consensusStaked + articleValues[articleHash].demotionStaked);
         } else {
-            articleValues[articleHash].dislikedStaked += msg.value;
+            articleValues[articleHash].stakesDown.stake[msg.sender] += msg.value;
+            articleValues[articleHash].demotionStaked += msg.value;
+            ratioAtPurchaseTime = articleValues[articleHash].demotionStaked * 1000 / (articleValues[articleHash].consensusStaked + articleValues[articleHash].demotionStaked);
         }
+
+        articleValues[articleHash].stakesUp[msg.sender].ratioAtPurchaseTime = ratioAtPurchaseTime;
+
+        articleValues[articleHash].voters.push(msg.sender);
 
         emit ArticleFunded(articleHash, liked);
     }
@@ -128,6 +151,7 @@ contract Article {
     function criticalFunded(bytes32 articleHash, uint256 criticalIndex, bool liked, bool fraud, bool lazy) public payable{
         require(articleValues[articleHash].votingActive, "Voting is not active for this article.");
         require(msg.value > 0, "Must send ETH to vote.");
+        require(msg.sender != articleValues[articleHash].author, "Author cannot vote on their own article.");
 
         articleValues[articleHash].stakes[msg.sender] += msg.value;
 
@@ -146,6 +170,22 @@ contract Article {
         emit CriticalFunded(articleHash, criticalIndex, liked);
     }
 
+    function payOutStakes(bytes32 articleHash) internal {
+
+        bool outcome = articleValues[articleHash].consensusStaked > articleValues[articleHash].demotionStaked;
+
+        for (uint256 i = 0; i < articleValues[articleHash].voters.length; i++) {
+            address voter = articleValues[articleHash].voters[i];
+            if outcome == 1 {
+                payable(voter).transfer(articleValues[articleHash].stakesUp[voter].stake*articleValues[articleHash].stakesUp[voter].ratioAtPurchaseTime / 1000); 
+            } else if outcome == 0 {
+                payable(voter).transfer(articleValues[articleHash].stakesDown[voter].stake*articleValues[articleHash].stakesDown[voter].ratioAtPurchaseTime / 1000);
+            }
+        }
+    }
+
+    
+
     function finalizeArticle(bytes32 articleHash) public {
         require(articleValues[articleHash].votingActive, "Voting is not active for this article.");
         require(isExpired(articleHash), "Voting period has not ended.");
@@ -162,15 +202,12 @@ contract Article {
             result.disliked = ((articleValues[articleHash].dislikedStaked*100/total) > 75) ? true : false;
         }
 
-        for (uint256 i = 0; i < articleValues[articleHash].totalCritics; i++) {
-            if (articleValues[articleHash].articleCritics[i].fraudFlagged && articleValues[articleHash].articleCritics[i].supportEth > articleValues[articleHash].articleCritics[i].denierEth) {
-                result.fraudFlags += 1;
-            } else if (articleValues[articleHash].articleCritics[i].lazyFlagged && articleValues[articleHash].articleCritics[i].supportEth > articleValues[articleHash].articleCritics[i].denierEth) {
-                result.lazyFlags += 1;
-            }
-        }
-
         articleResult[articleHash] = result;
+
+        payOutStakes(articleHash);
+
+        payoutQuotes(articleHash)
+
         delete articleValues[articleHash];
 
         emit ArticleFinalized(articleHash, result.liked, result.fraudFlags, result.lazyFlags, block.timestamp);

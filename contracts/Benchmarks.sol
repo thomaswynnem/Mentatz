@@ -34,7 +34,32 @@ contract GlobalJournalistStats {
         }
     }
 
-    function computeGlobalAverages() internal {
+    address public owner;
+    address public executor; // This will be Gelato’s executor address
+
+    modifier onlyGelatoOrOwner() {
+        require(msg.sender == owner || msg.sender == executor, "Not authorized");
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    function setExecutor(address _executor) external {
+        require(msg.sender == owner, "Only owner can set executor");
+        executor = _executor;
+    }
+
+    function withdraw(address payable to, uint256 amount) external onlyGelatoOrOwner {
+        require(address(this).balance >= amount, "Insufficient balance");
+        to.transfer(amount);
+    }
+
+    function computeGlobalAverages() public onlyGelatoOrOwner  {
+
+        require(finalizedArticles.length == 1000, "Must have 1000 articles to compute averages.");
+
         uint256 totalLiked = 0;
         uint256 totalFraud = 0;
         uint256 totalLazy = 0;
@@ -107,4 +132,19 @@ contract GlobalJournalistStats {
             z = (x / z + z) / 2;
         }
     }
+
+    function checker() external view returns (bool canExec, bytes memory execPayload) {
+    // Check if the number of finalized articles is 1000
+    if (finalizedArticles.length == 1000) {
+     // If so, return the function call to computeGlobalAverages
+        execPayload = abi.encodeWithSignature("computeGlobalAverages()");
+        canExec = true;
+     
+    } else {
+     // Otherwise, return an empty payload and set canExec to false
+        execPayload= bytes("Not enough articles yet");
+        canExec = false;
+    }
+    return (canExec, execPayload);
+  }
 }
