@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: UNLICENSED
-// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
  
 import "@openzeppelin/contracts@4.7.0/token/ERC721/ERC721.sol";
@@ -24,7 +23,8 @@ interface GlobalJournalistStats {
 }
 
 interface Article {
-    function articleResult(bytes32 articleHash) external view returns (
+
+    function getArticleResult(bytes32 articleHash) external view returns (
         uint256 startTime,
         uint256 votingPeriod,
         bool liked,
@@ -35,17 +35,29 @@ interface Article {
 }
 
 
-
 contract Mentatz is ERC721, ERC721URIStorage, Ownable {
+
+    enum TagId {
+        Amateur,     
+        Yellow,      
+        Rorschach,   
+        Sinclair,    
+        Goebbels     
+    }
     using Counters for Counters.Counter;
+
+    address public executor;
  
     Counters.Counter private _tokenIdCounter;
+
+    GlobalJournalistStats public stats;
+    Article public articleContract;
  
     constructor(address statsAddress, address articleAddress) ERC721("Mentatz", "MZ") {
         stats = GlobalJournalistStats(statsAddress);
         articleContract = Article(articleAddress);
     }
- 
+
     function safeMint(address to, string memory uri) public onlyOwner {
         uint256 tokenId = _tokenIdCounter.current();
         _tokenIdCounter.increment();
@@ -67,17 +79,42 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
     {
         return super.tokenURI(tokenId);
     }
-
+    // This is a SoulBound Token, so we override the _beforeTokenTransfer function to block transfers.
     function _beforeTokenTransfer(
         address from, 
         address to, 
         uint256 tokenId
-        ) internal override virtual {
-        require(from == address(0), "Err: token transfer is BLOCKED");   
-        super._beforeTokenTransfer(from, to, tokenId);  
+        ) internal override(ERC721) {
+        require(from == address(0), "Mentatz: SBT - transfer blocked");
+        super._beforeTokenTransfer(from, to, tokenId);
     }
 
-    event TagAssigned(address indexed author, string tag);
+    modifier onlyArticle() {                            
+        require(msg.sender == address(articleContract), "Caller not Article");
+        _;
+    }
+
+    function recordArticleResult( 
+        address  author,
+        bytes32  articleHash,
+        bool     liked,
+        bool     disliked,
+        uint256  fraudFlags,
+        uint256  lazyFlags
+    ) external onlyArticle {
+        JournalistStats storage js = journalistStats[author];
+
+        js.articleHashList.push(articleHash);             
+
+        js.totalArticles   += 1;
+        js.totalLiked      += liked     ? 1 : 0;
+        js.totalDisliked   += disliked  ? 1 : 0;
+        js.totalFraudFlags += fraudFlags;
+        js.totalLazyFlags  += lazyFlags;
+    }
+
+    
+    event TagAssigned(address indexed author, TagId tag);
     event StatsUpdated(uint256 avgLikeRate, uint256 avgFraudRate, uint256 avgLazyRate, uint256 avgNotFlaggedRate, uint256 stdLikeRate, uint256 stdFraudRate, uint256 stdLazyRate, uint256 stdNotFlaggedRate);
 
     struct JournalistStats {
@@ -87,54 +124,26 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
         uint256 totalFraudFlags;
         uint256 totalLazyFlags;
         bytes32[] articleHashList; // List of all article hashes
-        string tag;
+        TagId tag;
     }
 
 
     mapping(address => JournalistStats) public journalistStats;
 
-    function determineAuthorStats(address author) public view returns  (uint256 likes, uint256 dislikes, uint256 frauds, uint256 lazies) {
-        uint256 likes;
-        uint256 dislikes;
-        uint256 frauds;
-        uint256 lazies;
-
-        bytes32[] memory articleHashList = journalistStats[author].articleHashList;
-
-        for (uint256 i = 0; i < articleHashList.length; i++) {
-            bytes32 articleHash = articleHashList[i];
-            (uint256 startTime, , bool liked, bool disliked, uint256 fraudFlags, uint256 lazyFlags) = articleContract.articleResult(articleHash);
-
-            likes += liked;
-            dislikes += disliked;
-            frauds += fraudFlags;
-            lazies += lazyFlags;
-            
-        }
-
-        journalistStats[author].totalArticles = articleHashList.length;
-        journalistStats[author].totalLiked = likes;
-        journalistStats[author].totalDisliked = dislikes;
-        journalistStats[author].totalFraudFlags = frauds;
-        journalistStats[author].totalLazyFlags = lazies;
+    function computeTagMapping(address author) public {
         
-        return likes, dislikes, frauds, lazies;
-    }
+        JournalistStats storage js = journalistStats[author];
 
-    function computeTagMapping(address author) {
-        
-        (uint256 likes, uint256 dislikes, uint256 frauds, uint256 lazies) = determineAuthorStats(author);
-
-        if (journalistStats[author].totalArticles < 5) {
-            journalistStats[author].tag = "Amateur";
-            emit TagAssigned(author, "Amateur");
+        if (js.totalArticles < 5) {
+            js.tag = TagId.Amateur;
+            emit TagAssigned(author, js.tag);
             return;
         }
 
-        uint256 likeRate = (likes * 100) / journalistStats[author].totalArticles;
-        uint256 dislikeRate = (dislikes * 100) / journalistStats[author].totalArticles;
-        uint256 fraudRate = (frauds * 100) / journalistStats[author].totalArticles;
-        uint256 lazyRate = (lazies * 100) / journalistStats[author].totalArticles;
+        uint256 likeRate = (js.totalLiked * 100) / js.totalArticles;
+        uint256 dislikeRate = (js.totalDisliked * 100) / js.totalArticles;
+        uint256 fraudRate = (js.totalFraudFlags * 100) / js.totalArticles;
+        uint256 lazyRate = (js.totalLazyFlags * 100) / js.totalArticles;
         uint256 notFlaggedRate = 100 - (fraudRate + lazyRate);
         
         uint256 avgLikeRate = stats.avgLikeRate();
@@ -151,9 +160,8 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
 
         emit StatsUpdated(avgLikeRate, avgFraudRate, avgLazyRate, avgNotFlaggedRate, stdLikeRate, stdFraudRate, stdLazyRate, stdNotFlaggedRate);
 
-
         // The Formula for determining the tag is as follows:
-         int256 tagScore = 0;
+        int256 tagScore = 0;
 
         if (stdLikeRate > 0) {
             tagScore += int256((likeRate - avgLikeRate) * 1000 / stdLikeRate);
@@ -169,20 +177,20 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
         }
 
         if (tagScore > 3000) {
-            journalistStats[author].tag = "Mentat";
+            js.tag = TagId.Sinclair;
         } else if (tagScore > 0) {
-            journalistStats[author].tag = "Skeeter";
+            js.tag = TagId.Rorschach;
         } else if (tagScore > -1500) { 
-            journalistStats[author].tag = "Vogon";
+            js.tag = TagId.Yellow;
         } else if (tagScore < -1500) {
-            journalistStats[author].tag = "Ozymandias";
+            js.tag = TagId.Goebbels;
         }
 
-        emit TagAssigned(author, journalistStats[author].tag);
+        emit TagAssigned(author, js.tag);
 
     }
 
-    function getTag(address author) public view returns (string memory) {
+    function getTag(address author) external view returns (TagId) {
         return journalistStats[author].tag;
     }
 }
