@@ -21,6 +21,8 @@ interface Mentatz {
 }
 
 contract Article is ReentrancyGuard, Ownable {
+
+    address public executor;
     // Keeps Contract running
     function fundGelatoExecutor() external payable onlyOwner {
         require(executor != address(0), "Executor not set");
@@ -310,7 +312,7 @@ contract Article is ReentrancyGuard, Ownable {
             result.disliked,
             result.fraudFlags,
             result.lazyFlags
-        ) 
+        );
         
         articleResult[articleHash] = result;
         payOutStakes(articleHash);

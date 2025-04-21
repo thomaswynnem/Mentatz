@@ -23,6 +23,7 @@ interface GlobalJournalistStats {
 }
 
 interface Article {
+
     function getArticleResult(bytes32 articleHash) external view returns (
         uint256 startTime,
         uint256 votingPeriod,
@@ -32,7 +33,6 @@ interface Article {
         uint256 lazyFlags
     );
 }
-
 
 
 contract Mentatz is ERC721, ERC721URIStorage, Ownable {
@@ -45,6 +45,8 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
         Goebbels     
     }
     using Counters for Counters.Counter;
+
+    address public executor;
  
     Counters.Counter private _tokenIdCounter;
 
