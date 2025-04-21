@@ -9,26 +9,56 @@ interface PriceOracle {
     function DollarLimit(uint256 maxinput) external view returns (uint256);
 }
 
-contract Article is ReentrancyGuard, Ownable {
+interface Mentatz {
+    function recordArticleResult(
+        address author,
+        bytes32 articleHash,
+        bool    liked,
+        bool    disliked,
+        uint256 fraudFlags,
+        uint256 lazyFlags
+    ) external;
+}
 
+contract Article is ReentrancyGuard, Ownable {
+    // Keeps Contract running
     function fundGelatoExecutor() external payable onlyOwner {
         require(executor != address(0), "Executor not set");
-    
         payable(executor).transfer(msg.value);
     }
-
+    // Defines the executor address
     function setExecutor(address _executor) external {
         require(msg.sender == owner, "Only owner can set executor");
         executor = _executor;
     }
 
-    uint256 public currentMaxUSD = 20;
-    uint256 public currentCriticalFee = 5; // 4.20 USD in wei
+    // Defines the Oracle for calculating the ETH price
     PriceOracle public oracle;
+    Mentatz public mentatz;               
 
-    constructor(address oracleAddress) {
-        oracle = PriceOracle(oracleAddress);
+    constructor(address oracleAddress, address mentatzAddress)
+        Ownable(msg.sender)                
+    {
+        oracle  = PriceOracle(oracleAddress);
+        mentatz = Mentatz(mentatzAddress);
     }
+
+    uint256 public currentMaxUSD = 20;
+    uint256 public currentCriticalFee = 5;
+
+    event CriticalFeeChanged(uint256 newFee);
+    event MaxUSDChanged(uint256 newMax);
+    // Adjusts the fees in the article contract
+    function changeCriticalFee(uint256 newFee) public onlyOwner {
+        currentCriticalFee = newFee;
+        emit CriticalFeeChanged(newFee);
+    }
+
+    function changeMaxUSD(uint256 newMax) public onlyOwner {
+        currentMaxUSD = newMax;
+        emit MaxUSDChanged(newMax);
+    }
+
 
     function getOraclePrice(uint256 quantity) public view returns (uint256) {
         return oracle.DollarLimit(quantity);
@@ -41,12 +71,12 @@ contract Article is ReentrancyGuard, Ownable {
     }
 
     struct ArticleResult {
-        uint256 startTime;
-        uint256 votingPeriod;
-        bool liked;
-        bool disliked;
-        uint256 fraudFlags;
-        uint256 lazyFlags;
+        uint256 startTime; // Start Time of Voting
+        uint256 votingPeriod; // Voting Period in Seconds
+        bool liked; // Article Result
+        bool disliked; // Article Result
+        uint256 fraudFlags; // Amount of Fraud Flags
+        uint256 lazyFlags; // Amount of Lazy Flags
     }
 
     mapping(bytes32 => ArticleResult) public articleResult; // User Stakes
@@ -104,14 +134,14 @@ contract Article is ReentrancyGuard, Ownable {
     event ArticleFinalized(address indexed articleHash, bool liked, uint256 fraudFlags, uint256 lazyFlags, uint256 endTime);
 
     function createTimePeriod(bytes32 articleHash) private {
-        articleValues[articleHash].startTime = block.timestamp;
+        articleValues[articleHash].startTime = block.timestamp; // Start Time of Voting
         articleValues[articleHash].votingPeriod = 5 days; // 5 day voting period
     }
 
     function isExpired(bytes32 articleHash) public view returns (bool) {
         return block.timestamp > articleValues[articleHash].startTime + articleValues[articleHash].votingPeriod;
     }
-
+    // Function to create a new article hash and initialize the voting period
     function createArticleHash(string memory title, string memory content, address author) public returns (bytes32) {
         bytes32 articleHash = keccak256(abi.encodePacked(title, content, author));
         if (articleValues[articleHash].votingActive) {
@@ -120,23 +150,18 @@ contract Article is ReentrancyGuard, Ownable {
         createTimePeriod(articleHash);
         articleValues[articleHash].votingActive = true;
         articleValues[articleHash].author = author;
-        activeArticleHashes.push(articleHash);
+        activeArticleHashes.push(articleHash); // Add to active articles
         return articleHash;
     }
-
+    // An expensive task that is used to criticize an article. This function is called by the user to criticize an article.
     function criticize(bytes32 articleHash, string memory quote, bool lazyFlagged, bool fraudFlagged) public payable {
 
         address criticAddress = msg.sender;
-
-        ArticleCritic memory critical;
-
+        ArticleCritic memory critical; // Create a new critic struct
         uint256 fiveDollarLimit = getOraclePrice(currentCriticalFee);
-
         require(msg.value > fiveDollarLimit, "Must send 5 worth of Eth to criticize.");
-
         critical.criticAddress = criticAddress;
-
-        uint256 feeAmount = msg.value / 10; // 10%
+        uint256 feeAmount = msg.value / 10; // 10% // Send 10% to fee collector for BenchMarks  
         uint256 remainingStake = msg.value - feeAmount;
 
         if (feeCollector != address(0)) {
@@ -151,36 +176,29 @@ contract Article is ReentrancyGuard, Ownable {
         } else {
             revert("No input on article.");
         }
+
         critical.quote = quote;
-
         articleValues[articleHash].articleCritics.push(critical);
-
         articleValues[articleHash].totalCritics += 1;
 
         emit ArticleCritical(articleValues[articleHash].totalCritics - 1, criticAddress, quote, lazyFlagged, fraudFlagged);
     }
 
-
+    // Function to fund an article based on its quality (do you want to inflate or purge the article)
     function articleFunded(bytes32 articleHash, bool consensus) public payable {
 
         require(articleValues[articleHash].votingActive, "Voting is not active for this article.");
-        require(msg.value > 0, "Must send ETH to vote.");
+        require(msg.value > 0, "Must send ETH to vote."); 
         require(msg.sender != articleValues[articleHash].author, "Author cannot vote on their own article.");
-
         require(articleValues[articleHash].stakesDown[msg.sender].stake == 0 || consensus == true, "You have already voted No on this article.");
         require(articleValues[articleHash].stakesUp[msg.sender].stake == 0 || consensus == false, "You have already voted Yes on this article.");
 
         ArticleInProcess storage article = articleValues[articleHash];
-
         uint256 twentyDollarLimit = getOraclePrice(currentMaxUSD);
-
         uint256 userTotal = article.stakesUp[msg.sender].stake + article.stakesDown[msg.sender].stake + msg.value;
-
-        if (userTotal > twentyDollarLimit) {
-            revert("You have exceeded the $20 limit.");
-        }
-
+        require(userTotal <= twentyDollarLimit, "You have exceeded the $20 limit.");
         uint256 ratioAtPurchaseTime; 
+
         if (consensus) {
             article.stakesUp[msg.sender].stake += msg.value;
             article.inflateStake += msg.value;
@@ -192,20 +210,19 @@ contract Article is ReentrancyGuard, Ownable {
         }
 
         article.stakesUp[msg.sender].ratioAtPurchaseTime = ratioAtPurchaseTime;
-
         article.voters.push(msg.sender);
 
         emit ArticleFunded(articleHash, consensus);
     }
-
+    // Function to fund a critical piece on an article
     function criticalFunded(bytes32 articleHash, uint256 criticalIndex, bool liked, bool fraud, bool lazy) public payable{
+
         require(articleValues[articleHash].votingActive, "Voting is not active for this article.");
         require(msg.value > 0, "Must send ETH to vote.");
         require(msg.sender != articleValues[articleHash].author, "Author cannot vote on their own article.");
 
         ArticleInProcess storage article = articleValues[articleHash];
         ArticleCritic storage critic = article.articleCritics[criticalIndex];
-
         uint256 twentyDollarLimit = getOraclePrice(currentMaxUSD);
         uint256 userTotal = critic.stakesUp[msg.sender].stake + critic.stakesDown[msg.sender].stake + msg.value;
         require(userTotal <= twentyDollarLimit, "You have exceeded the $20 limit.");
@@ -224,8 +241,9 @@ contract Article is ReentrancyGuard, Ownable {
         
         emit CriticalFunded(articleHash, criticalIndex, liked);
     }
-
+    // Actual payouts must be made by users withdrawing their funds, this function simply calculates the payouts and adds them to the pendingWithdrawals mapping.
     function payOutStakes(bytes32 articleHash) internal {
+
         ArticleInProcess storage article = articleValues[articleHash];
         bool outcome = article.inflateStake > article.purgeStake;
 
@@ -240,8 +258,9 @@ contract Article is ReentrancyGuard, Ownable {
             pendingWithdrawals[voter] += amount;
         }
     }
-
+    // Actual payouts must be made by users withdrawing their funds, this function simply calculates the payouts and adds them to the pendingWithdrawals mapping.
     function payOutCriticals (bytes32 articleHash) {
+
             ArticleInProcess storage article = articleValues[articleHash];
             for (uint256 iv = 0; iv < article.articleCritics.length; iv++) {
                 ArticleCritic storage critic = article.articleCritics[iv];
@@ -260,8 +279,10 @@ contract Article is ReentrancyGuard, Ownable {
     }
 
     
+    // Function to finalize the article and pay out the stakes
+    // This function can be called by the Gelato executor or the owner
+    function finalizeArticle(bytes32 articleHash) public onlyOwnerorGelato {
 
-    function finalizeArticle(bytes32 articleHash) public {
         require(articleValues[articleHash].votingActive, "Voting is not active for this article.");
         require(isExpired(articleHash), "Voting period has not ended.");
 
@@ -270,8 +291,9 @@ contract Article is ReentrancyGuard, Ownable {
         result.startTime = articleValues[articleHash].startTime;
         result.votingPeriod = articleValues[articleHash].votingPeriod;
         uint256 total = articleValues[articleHash].inflateStake + articleValues[articleHash].purgeStake;
+
         if (total == 0) {
-            result.liked = false; // No votes cast
+            result.liked = false;
         } else{
             result.liked = ((articleValues[articleHash].inflateStake*100/total) > 75) ? true : false;
             result.disliked = ((articleValues[articleHash].purgeStake*100/total) > 75) ? true : false;
@@ -281,10 +303,17 @@ contract Article is ReentrancyGuard, Ownable {
             if (article.articleCritics[i].lazyFlagged) result.lazyFlags++;
         }
 
+        mentatz.recordArticleResult(
+            article.author,
+            articleHash,
+            result.liked,
+            result.disliked,
+            result.fraudFlags,
+            result.lazyFlags
+        ) 
+        
         articleResult[articleHash] = result;
-
         payOutStakes(articleHash);
-
         payOutCriticals(articleHash);
 
         for (uint256 i = 0; i < activeArticleHashes.length; i++) {
@@ -296,43 +325,32 @@ contract Article is ReentrancyGuard, Ownable {
         }
 
         delete articleValues[articleHash];
-
         emit ArticleFinalized(articleHash, result.liked, result.fraudFlags, result.lazyFlags, block.timestamp);
     }
 
+    // External functions to get internal data
+    function getArticleHash(string memory title, string memory content, address author) public view returns (bytes32) {
+        return keccak256(abi.encodePacked(title, content, author));
+    }
     function getArticleInProcess(bytes32 articleHash) external view returns (address author, uint256 startTime, uint256 votingPeriod, bool votingActive, uint256 inflateStake, uint256 purgeStake, uint256 totalCriticals, uint256 totalCritics) {
         ArticleInProcess memory a = articleValues[articleHash];
         return (a.author, a.startTime, a.votingPeriod, a.votingActive, a.inflateStake, a.purgeStake, a.totalCriticals, a.totalCritics);
     }
-
     function getArticleResult(bytes32 articleHash) external view returns (uint256 startTime, uint256 votingPeriod, bool liked, bool disliked, uint256 fraudFlags, uint256 lazyFlags) {
         ArticleResult memory a = articleResult[articleHash];
         return (a.startTime, a.votingPeriod, a.liked, a.disliked, a.fraudFlags, a.lazyFlags);
     }
-
     function getPendingWithdrawals() external view returns (uint256) {
         return pendingWithdrawals[msg.sender];
     }
-
-    event CriticalFeeChanged(uint256 newFee);
-    event MaxUSDChanged(uint256 newMax);
-
-    function changeCriticalFee(uint256 newFee) public onlyOwner {
-        currentCriticalFee = newFee;
-        emit CriticalFeeChanged(newFee);
-    }
-
-    function changeMaxUSD(uint256 newMax) public onlyOwner {
-        currentMaxUSD = newMax;
-        emit MaxUSDChanged(newMax);
-    }
-
     function getAllActiveArticles() external view returns (bytes32[] memory) {
         return activeArticleHashes;
     }
+    function getArticleCritics(bytes32 articleHash) external view returns (ArticleCritic[] memory) {
+        return articleValues[articleHash].articleCritics;
+    }
 
-    
-
+    // Function to check if the article is expired and can be finalized (for Gelato)
     function checker() external view returns (bool canExec, bytes memory execPayload) {
         for (uint256 i = 0; i < activeArticleHashes.length; i++) {
             bytes32 hash = activeArticleHashes[i];

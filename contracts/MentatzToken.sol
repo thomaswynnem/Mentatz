@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: UNLICENSED
-// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
  
 import "@openzeppelin/contracts@4.7.0/token/ERC721/ERC721.sol";
@@ -24,7 +23,7 @@ interface GlobalJournalistStats {
 }
 
 interface Article {
-    function articleResult(bytes32 articleHash) external view returns (
+    function getArticleResult(bytes32 articleHash) external view returns (
         uint256 startTime,
         uint256 votingPeriod,
         bool liked,
@@ -45,7 +44,7 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
         stats = GlobalJournalistStats(statsAddress);
         articleContract = Article(articleAddress);
     }
- 
+
     function safeMint(address to, string memory uri) public onlyOwner {
         uint256 tokenId = _tokenIdCounter.current();
         _tokenIdCounter.increment();
@@ -67,7 +66,7 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
     {
         return super.tokenURI(tokenId);
     }
-
+    // This is a SoulBound Token, so we override the _beforeTokenTransfer function to block transfers.
     function _beforeTokenTransfer(
         address from, 
         address to, 
@@ -93,20 +92,16 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
 
     mapping(address => JournalistStats) public journalistStats;
 
-    function determineAuthorStats(address author) public view returns  (uint256 likes, uint256 dislikes, uint256 frauds, uint256 lazies) {
-        uint256 likes;
-        uint256 dislikes;
-        uint256 frauds;
-        uint256 lazies;
+    function determineAuthorStats(address author) public returns  (uint256 likes, uint256 dislikes, uint256 frauds, uint256 lazies) {
 
         bytes32[] memory articleHashList = journalistStats[author].articleHashList;
 
         for (uint256 i = 0; i < articleHashList.length; i++) {
             bytes32 articleHash = articleHashList[i];
-            (uint256 startTime, , bool liked, bool disliked, uint256 fraudFlags, uint256 lazyFlags) = articleContract.articleResult(articleHash);
+            (uint256 startTime, _ , bool liked, bool disliked, uint256 fraudFlags, uint256 lazyFlags) = articleContract.getArticleResult(articleHash);
 
-            likes += liked;
-            dislikes += disliked;
+            likes += liked ? 1 : 0;
+            dislikes += disliked ? 1 : 0;
             frauds += fraudFlags;
             lazies += lazyFlags;
             
@@ -121,7 +116,7 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
         return likes, dislikes, frauds, lazies;
     }
 
-    function computeTagMapping(address author) {
+    function computeTagMapping(address author) public {
         
         (uint256 likes, uint256 dislikes, uint256 frauds, uint256 lazies) = determineAuthorStats(author);
 
