@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-contract GlobalJournalistStats {
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+
+contract GlobalJournalistStats is Ownable {
     struct ArticleResult {
         bool liked;
         bool fraudFlagged;
@@ -35,18 +38,15 @@ contract GlobalJournalistStats {
     }
 
     address public owner;
-    address public executor; // This will be Gelato’s executor address
+    address public executor;
 
     modifier onlyGelatoOrOwner() {
-        require(msg.sender == owner || msg.sender == executor, "Not authorized");
+        require(msg.sender == owner() || msg.sender == executor, "Not authorized");
         _;
     }
 
-    constructor() {
-        owner = msg.sender;
-    }
 
-    function setExecutor(address _executor) external {
+    function setExecutor(address _executor) external onlyOwner(){
         require(msg.sender == owner, "Only owner can set executor");
         executor = _executor;
     }

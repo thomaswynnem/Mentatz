@@ -169,13 +169,13 @@ contract Mentatz is ERC721, ERC721URIStorage, Ownable {
         }
 
         if (tagScore > 3000) {
-            journalistStats[author].tag = "Mentat";
+            journalistStats[author].tag = "Sinclair";
         } else if (tagScore > 0) {
-            journalistStats[author].tag = "Skeeter";
+            journalistStats[author].tag = "Rorschach";
         } else if (tagScore > -1500) { 
-            journalistStats[author].tag = "Vogon";
+            journalistStats[author].tag = "Yellow";
         } else if (tagScore < -1500) {
-            journalistStats[author].tag = "Ozymandias";
+            journalistStats[author].tag = "Goebbels";
         }
 
         emit TagAssigned(author, journalistStats[author].tag);
