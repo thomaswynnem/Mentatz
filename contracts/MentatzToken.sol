@@ -6,8 +6,6 @@ import "@openzeppelin/contracts@4.7.0/token/ERC721/extensions/ERC721URIStorage.s
 import "@openzeppelin/contracts@4.7.0/access/Ownable.sol";
 import "@openzeppelin/contracts@4.7.0/utils/Counters.sol"; 
  
-
-
 interface GlobalJournalistStats {
     function avgLikeRate() external view returns (uint256);
     function avgDislikeRate() external view returns (uint256);
